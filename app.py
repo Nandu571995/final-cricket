@@ -101,58 +101,55 @@ def overlay():
         return "Missing ?match=ID parameter. Example: /overlay?match=12345", 400
     match_id = m.group()
     ensure_scraper(match_id)
-    # Kick off squad scrape if provided
     if squad_url:
         threading.Thread(target=scrape_playing11_bg, args=(match_id, squad_url), daemon=True).start()
-    # Serve the overlay HTML
+
     html_file = os.path.join(os.path.dirname(__file__), "livematch_v20.html")
     if not os.path.exists(html_file):
-        html_file = os.path.join(os.path.dirname(__file__), "livematch.html")
+        return "livematch_v20.html not found", 500
     with open(html_file, encoding="utf-8") as f:
         html = f.read()
 
-    # Auto-start: inject match ID and squad URL so setup screen is skipped automatically
-    autostart_js = f"""
-<script>
-// ── SERVER AUTO-START — injected by Railway backend ──
-(function() {{
-  var MID = "{match_id}";
-  var SQUAD = "{squad_url.replace('"', '')}";
-  // Wait for DOM then auto-start
-  function doStart() {{
-    // Hide setup screen immediately
-    var setup = document.getElementById('matchSetup');
-    if (setup) setup.style.display = 'none';
-    // Set globals
-    if (typeof currentMatchId !== 'undefined') {{
-      currentMatchId = MID;
-      currentSquadUrl = SQUAD;
-    }} else {{
-      window._autoMatchId = MID;
-      window._autoSquadUrl = SQUAD;
-    }}
-    // Fill admin fields
-    var admId = document.getElementById('admMatchId');
-    if (admId) admId.value = MID;
-    var admSq = document.getElementById('admSquadUrl');
-    if (admSq) admSq.value = SQUAD;
-    // Start polling
-    if (typeof poll === 'function') {{
-      if (SQUAD && typeof fetchPlaying11 === 'function') fetchPlaying11(SQUAD);
-      poll();
-      setInterval(poll, 2000);
-    }}
+    # 1. Pre-set currentMatchId so poll() works immediately — replace the JS variable declaration
+    html = html.replace(
+        "let lastData=null,prevJ=\'\',prevBall=\'\',prevBallVal=\'\';",
+        f"let lastData=null,prevJ=\'\',prevBall=\'\',prevBallVal=\'\';currentMatchId=\'{match_id}\';currentSquadUrl=\'{squad_url}\';"
+    )
+
+    # 2. Point the fetch directly at server endpoint
+    html = html.replace(
+        "fetch('/data/'+currentMatchId+'?t='+Date.now(),{signal:AbortSignal.timeout(3000)})",
+        f"fetch('/data/{match_id}?t='+Date.now(),{{signal:AbortSignal.timeout(3000)}})"
+    )
+
+    # 3. Inject auto-start block right before </script> at end
+    squad_safe = squad_url.replace("\\", "").replace("'", "")
+    autostart = f"""
+// ═══ SERVER INJECTED AUTO-START ═══
+(function serverAutoStart() {{
+  function _start() {{
+    // Hide setup screen
+    var s = document.getElementById('matchSetup');
+    if (s) s.style.display = 'none';
+    // Set match globals
+    currentMatchId = '{match_id}';
+    currentSquadUrl = '{squad_safe}';
+    // Set admin fields
+    var a1 = document.getElementById('admMatchId');
+    if (a1) a1.value = '{match_id}';
+    var a2 = document.getElementById('admSquadUrl');
+    if (a2) a2.value = '{squad_safe}';
+    // Fetch squad + start polling
+    if (currentSquadUrl && typeof fetchPlaying11 === 'function') fetchPlaying11(currentSquadUrl);
+    if (typeof poll === 'function') {{ poll(); setInterval(poll, 2000); }}
   }}
-  if (document.readyState === 'loading') {{
-    document.addEventListener('DOMContentLoaded', doStart);
-  }} else {{
-    setTimeout(doStart, 100);
-  }}
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _start);
+  else _start();
 }})();
-</script>
 """
-    # Inject before </body>
-    html = html.replace('</body>', autostart_js + '</body>')
+    html = html.replace('</script>
+</body>', autostart + '</script>
+</body>')
 
     return html
 
