@@ -783,7 +783,7 @@ table.sct tr:hover td{background:rgba(255,200,0,.04);}
         <div class="flag-inner" id="flagInner1">🏏</div>
       </div>
       <div class="t-info">
-        <div class="t-name" id="tname1">TEAM 1</div>
+        <div class="t-name" id="tname1" onclick="showP11(1)" style="cursor:pointer;" title="Click for Playing XI">TEAM 1</div>
         <div class="t-score" id="score1">---</div>
         <div class="t-overs" id="overs1">OVERS: 0.0</div>
       </div>
@@ -799,7 +799,7 @@ table.sct tr:hover td{background:rgba(255,200,0,.04);}
     <!-- RIGHT TEAM — click for Venue+Weather -->
     <div class="team-r" id="teamR">
       <div class="t-info right">
-        <div class="t-name" id="tname2">TEAM 2</div>
+        <div class="t-name" id="tname2" onclick="showP11(2)" style="cursor:pointer;" title="Click for Playing XI">TEAM 2</div>
         <div class="bowling-txt" id="bowlingTxt">BOWLING</div>
         <div class="t-score" id="score2" style="display:none;font-size:76px;"></div>
         <div class="t-overs" id="overs2" style="display:none;"></div>
@@ -1756,65 +1756,107 @@ async function showIntro(who){
   fetchPlayerDetails(p.name,role);
 }
 
-async function fetchPlayerDetails(name,role){
-  try{
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        tools:[{type:'web_search_20250305',name:'web_search'}],
-        messages:[{role:'user',content:`Search Cricbuzz for cricket player profile: "${name}". Find their current career stats and personal details.
+async function fetchPlayerDetails(name, role) {
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        tools: [{type: 'web_search_20250305', name: 'web_search'}],
+        messages: [{role: 'user', content: `Search Cricbuzz for the cricket player profile of "${name}". Find their complete career statistics including all formats (Test, ODI, T20I, IPL/domestic).
 
-Return ONLY this exact JSON (no markdown, no explanation):
+Return ONLY this exact JSON (no markdown, no explanation, no extra text):
 {
   "age": "28",
   "country": "India",
+  "born": "12 Mar 1996",
   "batting_style": "Right-hand bat",
-  "bowling_style": "Right-arm fast",
-  "matches": "45",
-  "runs": "1234",
-  "average": "38.5",
-  "highest": "112",
-  "wickets": "12",
-  "bowling_average": "32.1",
-  "photo_url": "https://cricbuzz photo url if found"
+  "bowling_style": "Right-arm fast-medium",
+  "role": "All-rounder",
+  "photo_url": "",
+  "batting": {
+    "test":  {"mat":"45","inns":"78","runs":"2341","avg":"34.1","hs":"156","100s":"6","50s":"12","sr":"52.3"},
+    "odi":   {"mat":"89","inns":"82","runs":"2890","avg":"38.5","hs":"112","100s":"5","50s":"18","sr":"88.6"},
+    "t20i":  {"mat":"62","inns":"58","runs":"1456","avg":"28.0","hs":"74","100s":"0","50s":"9","sr":"138.2"},
+    "ipl":   {"mat":"110","inns":"105","runs":"2980","avg":"32.1","hs":"95","100s":"0","50s":"22","sr":"142.5"}
+  },
+  "bowling": {
+    "test":  {"mat":"45","wkts":"78","avg":"28.4","econ":"2.8","bbi":"6/44","bbm":"10/120","sr":"52.1"},
+    "odi":   {"mat":"89","wkts":"112","avg":"24.1","econ":"4.9","bbi":"5/32","sr":"29.5"},
+    "t20i":  {"mat":"62","wkts":"68","avg":"20.2","econ":"7.8","bbi":"4/18","sr":"15.6"},
+    "ipl":   {"mat":"110","wkts":"98","avg":"23.5","econ":"8.2","bbi":"4/22","sr":"17.2"}
+  }
 }`}]
       })
     });
-    const data=await resp.json();
-    const text=(data.content||[]).map(i=>i.type==='text'?i.text:'').filter(Boolean).join('');
-    const clean=text.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
-    const jsonMatch=clean.match(/\{[\s\S]*\}/);
-    if(jsonMatch){
-      const pd=JSON.parse(jsonMatch[0]);
-      // Update photo if better one found
-      if(pd.photo_url&&pd.photo_url.startsWith('http')){
-        const ip=document.getElementById('iPhoto');
-        if(ip){ip.src=pd.photo_url;ip.style.display='block';document.getElementById('iNoPhoto').style.display='none';}
-      }
-      // Show player details
-      let detHtml='';
-      if(pd.age)detHtml+=`<div class="idet"><b>Age:</b> ${pd.age}</div>`;
-      if(pd.country)detHtml+=`<div class="idet"><b>Country:</b> ${pd.country}</div>`;
-      if(pd.batting_style)detHtml+=`<div class="idet"><b>Bat:</b> ${pd.batting_style}</div>`;
-      if(pd.bowling_style)detHtml+=`<div class="idet"><b>Bowl:</b> ${pd.bowling_style}</div>`;
-      document.getElementById('iDetails').innerHTML=detHtml;
-      // Update career stats
-      let careerHtml='';
-      if(pd.matches)careerHtml+=`<div class="istat" style="animation-delay:.1s"><div class="istat-val">${pd.matches}</div><div class="istat-lbl">MATCHES</div></div>`;
-      if(pd.runs)careerHtml+=`<div class="istat" style="animation-delay:.2s"><div class="istat-val">${pd.runs}</div><div class="istat-lbl">CAREER RUNS</div></div>`;
-      if(pd.average)careerHtml+=`<div class="istat" style="animation-delay:.3s"><div class="istat-val">${pd.average}</div><div class="istat-lbl">AVERAGE</div></div>`;
-      if(pd.highest)careerHtml+=`<div class="istat" style="animation-delay:.4s"><div class="istat-val">${pd.highest}</div><div class="istat-lbl">HIGHEST</div></div>`;
-      if(pd.wickets&&pd.wickets!=='0')careerHtml+=`<div class="istat" style="animation-delay:.5s"><div class="istat-val">${pd.wickets}</div><div class="istat-lbl">CAREER WKTS</div></div>`;
-      if(careerHtml){
-        const existing=document.getElementById('iStats').innerHTML;
-        document.getElementById('iStats').innerHTML=existing+'<div style="width:100%;height:1px;background:rgba(255,200,0,.15);margin:8px 0;"></div>'+careerHtml;
-      }
+
+    const data = await resp.json();
+    const text = (data.content || []).map(i => i.type === 'text' ? i.text : '').filter(Boolean).join('');
+    const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const m = clean.match(/\{[\s\S]*\}/);
+    if (!m) return;
+
+    const pd = JSON.parse(m[0]);
+
+    // Update photo
+    if (pd.photo_url && pd.photo_url.startsWith('http')) {
+      const ip = document.getElementById('iPhoto');
+      if (ip) { ip.src = pd.photo_url; ip.style.display = 'block'; document.getElementById('iNoPhoto').style.display = 'none'; }
     }
-  }catch(e){console.warn('Player details fetch failed:',e);}
-  finally{const l=document.getElementById('iLoading');if(l)l.style.display='none';}
+
+    // Personal details chips
+    let detHtml = '';
+    if (pd.age)           detHtml += `<div class="idet"><b>Age:</b> ${pd.age}</div>`;
+    if (pd.born)          detHtml += `<div class="idet"><b>Born:</b> ${pd.born}</div>`;
+    if (pd.country)       detHtml += `<div class="idet"><b>Country:</b> ${pd.country}</div>`;
+    if (pd.batting_style) detHtml += `<div class="idet"><b>Bat:</b> ${pd.batting_style}</div>`;
+    if (pd.bowling_style) detHtml += `<div class="idet"><b>Bowl:</b> ${pd.bowling_style}</div>`;
+    if (pd.role)          detHtml += `<div class="idet"><b>Role:</b> ${pd.role}</div>`;
+    document.getElementById('iDetails').innerHTML = detHtml;
+
+    // Build full career stats table
+    const divider = '<div style="width:100%;height:1px;background:rgba(255,200,0,.12);margin:8px 0;"></div>';
+    const secHdr = (t, col) => `<div style="font-family:Oswald;font-size:10px;font-weight:700;color:${col||'rgba(255,200,0,.55)'};letter-spacing:2px;margin:6px 0 3px;width:100%;">${t}</div>`;
+    const tblHdr = (cols) => `<div style="display:grid;grid-template-columns:${cols.map(()=>'1fr').join(' ')};gap:2px;width:100%;margin-bottom:2px;">${cols.map(c=>`<div style="font-family:Oswald;font-size:9px;color:rgba(255,200,0,.4);text-align:center;letter-spacing:1px;">${c}</div>`).join('')}</div>`;
+    const fmtRow = (label, d, isBAT) => {
+      if (!d || !d.mat || d.mat === '0') return '';
+      const cells = isBAT
+        ? [label, d.mat, d.inns||'-', d.runs||'-', d.avg||'-', d.hs||'-', d.sr||'-', d.100s||'-', d.50s||'-']
+        : [label, d.mat, d.wkts||'-', d.avg||'-', d.econ||'-', d.bbi||'-', d.sr||'-'];
+      const cols = isBAT
+        ? ['FMT','M','INN','RUNS','AVG','HS','SR','100','50']
+        : ['FMT','M','WKT','AVG','ECON','BBI','SR'];
+      const colW = isBAT ? 'repeat(9,1fr)' : 'repeat(7,1fr)';
+      return `<div style="display:grid;grid-template-columns:${colW};gap:2px;width:100%;background:rgba(255,255,255,.04);border-radius:4px;padding:3px 2px;margin-bottom:2px;">
+        ${cells.map((c,i)=>`<div style="font-family:${i>0?'Bebas Neue':'Oswald'};font-size:${i>0?'14':'10'}px;color:${i===0?'rgba(255,200,0,.7)':i===3&&isBAT?'#FFD700':'rgba(255,255,255,.8)'};text-align:center;">${c}</div>`).join('')}
+      </div>`;
+    };
+
+    let statHtml = '';
+    const bat = pd.batting || {};
+    const bowl = pd.bowling || {};
+    const hasBat = bat.test||bat.odi||bat.t20i||bat.ipl;
+    const hasBowl = bowl.test||bowl.odi||bowl.t20i||bowl.ipl;
+
+    if (hasBat) {
+      statHtml += divider + secHdr('BATTING CAREER', '#FFD700');
+      statHtml += tblHdr(['FMT','M','INN','RUNS','AVG','HS','SR','100','50']);
+      ['test','odi','t20i','ipl'].forEach(fmt => { statHtml += fmtRow(fmt.toUpperCase(), bat[fmt], true); });
+    }
+    if (hasBowl) {
+      statHtml += divider + secHdr('BOWLING CAREER', '#88ccff');
+      statHtml += tblHdr(['FMT','M','WKT','AVG','ECON','BBI','SR']);
+      ['test','odi','t20i','ipl'].forEach(fmt => { statHtml += fmtRow(fmt.toUpperCase(), bowl[fmt], false); });
+    }
+
+    // Append to existing match stats
+    const existing = document.getElementById('iStats').innerHTML;
+    document.getElementById('iStats').innerHTML = existing + statHtml;
+
+  } catch(e) { console.warn('Player details fetch failed:', e); }
+  finally { const l = document.getElementById('iLoading'); if(l) l.style.display = 'none'; }
 }
 
 function closeIntro(){document.getElementById('intro').classList.remove('on');}
@@ -1901,9 +1943,9 @@ async function showH2H(){
         model:'claude-sonnet-4-20250514',
         max_tokens:1000,
         tools:[{type:'web_search_20250305',name:'web_search'}],
-        messages:[{role:'user',content:`Search Cricbuzz or crex.live for head to head cricket stats between "${t1}" and "${t2}".
+        messages:[{role:'user',content:`Search crex.live for head to head cricket stats between "${t1}" and "${t2}". Try searching: crex.live head to head "${t1}" "${t2}" OR site:crex.live "${t1}" vs "${t2}". Also try Cricbuzz if crex has no data.
 
-Return ONLY this exact JSON (no markdown):
+Return ONLY this exact JSON (no markdown, no extra text):
 {
   "total_matches": 24,
   "team1_wins": 14,
@@ -1985,9 +2027,9 @@ async function showVenue(){
         model:'claude-sonnet-4-20250514',
         max_tokens:1000,
         tools:[{type:'web_search_20250305',name:'web_search'}],
-        messages:[{role:'user',content:`Search for the current cricket match between "${t1}" and "${t2}" (series: "${seriesName}") on Cricbuzz. Find the venue details and current weather at the venue.
+        messages:[{role:'user',content:`Search crex.live for the venue and weather of the cricket match: "${t1}" vs "${t2}" ${seriesName ? '(' + seriesName + ')' : ''}. Try: crex.live "${t1}" "${t2}" venue weather. Also check Cricbuzz for weather and pitch report.
 
-Return ONLY this exact JSON (no markdown):
+Return ONLY this exact JSON (no markdown, no extra text):
 {
   "venue": "Wanderers Stadium",
   "city": "Johannesburg",
@@ -2219,7 +2261,10 @@ async function loadScorecard() {
 
   const t1 = lastData && lastData.team1 ? (lastData.team1.name || 'Team 1') : 'Team 1';
   const t2 = lastData && lastData.team2 ? (lastData.team2.name || 'Team 2') : 'Team 2';
-  const series = lastData ? (lastData.series || lastData.match_name || '') : '';
+  const series = lastData ? (lastData.series || lastData.series_name || lastData.match_name || '') : '';
+  const matchId = currentMatchId || '';
+  const score1 = lastData?.team1?.score || '';
+  const score2 = lastData?.team2?.score || '';
 
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -2229,10 +2274,20 @@ async function loadScorecard() {
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1000,
         tools: [{type: 'web_search_20250305', name: 'web_search'}],
-        messages: [{role: 'user', content: `Search Cricbuzz for the live scorecard of the current cricket match: "${t1}" vs "${t2}" ${series ? '(' + series + ')' : ''}.
+        messages: [{role: 'user', content: `Search crex.live and Cricbuzz for the LIVE scorecard of this cricket match:
+Teams: "${t1}" vs "${t2}"
+${series ? 'Series: ' + series : ''}
+${matchId ? 'Match ID: ' + matchId : ''}
+${score1 ? 'Current score: ' + t1 + ' ' + score1 : ''}
+${score2 ? t2 + ' ' + score2 : ''}
 
-Return ONLY this JSON (no markdown):
-{"innings":[{"team":"Team Name","total":"234/6","overs":"45.3","batsmen":[{"name":"Player","runs":45,"balls":62,"fours":4,"sixes":1,"sr":"72.6","how_out":"c Smith b Jones","not_out":false}],"bowlers":[{"name":"Bowler","overs":"8","maidens":1,"runs":42,"wickets":2,"economy":"5.25"}],"extras":"lb4 w6 nb2 = 12","fow":["1-45 (Smith, 8.2)","2-98 (Jones, 18.4)"]}]}`}]
+Search for: "${t1} vs ${t2} scorecard ${new Date().getFullYear()}"
+Also try: site:crex.live "${t1}" "${t2}" scorecard
+
+Extract the COMPLETE batting and bowling scorecard for ALL innings played so far.
+
+Return ONLY this JSON (no markdown, no extra text):
+{"innings":[{"team":"Team Name","total":"234/6","overs":"45.3","batsmen":[{"name":"Player Name","runs":45,"balls":62,"fours":4,"sixes":1,"sr":"72.6","how_out":"c Smith b Jones","not_out":false},{"name":"Not Out Player","runs":32,"balls":28,"fours":3,"sixes":0,"sr":"114.3","how_out":"","not_out":true}],"bowlers":[{"name":"Bowler Name","overs":"8","maidens":1,"runs":42,"wickets":2,"economy":"5.25"}],"extras":"lb4 w6 nb2 = 12","fow":["1-45 (Smith, 8.2)","2-98 (Jones, 18.4)"]}]}`}]
       })
     });
     const data = await resp.json();
