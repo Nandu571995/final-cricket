@@ -110,11 +110,50 @@ def overlay():
         html_file = os.path.join(os.path.dirname(__file__), "livematch.html")
     with open(html_file, encoding="utf-8") as f:
         html = f.read()
-    # Patch data source to use server endpoint
-    html = html.replace(
-        "fetch('/data/'+currentMatchId+'?t='+Date.now(),{signal:AbortSignal.timeout(3000)})",
-        f"fetch('/data/{match_id}?t='+Date.now(),{{signal:AbortSignal.timeout(3000)}})"
-    )
+
+    # Auto-start: inject match ID and squad URL so setup screen is skipped automatically
+    autostart_js = f"""
+<script>
+// ── SERVER AUTO-START — injected by Railway backend ──
+(function() {{
+  var MID = "{match_id}";
+  var SQUAD = "{squad_url.replace('"', '')}";
+  // Wait for DOM then auto-start
+  function doStart() {{
+    // Hide setup screen immediately
+    var setup = document.getElementById('matchSetup');
+    if (setup) setup.style.display = 'none';
+    // Set globals
+    if (typeof currentMatchId !== 'undefined') {{
+      currentMatchId = MID;
+      currentSquadUrl = SQUAD;
+    }} else {{
+      window._autoMatchId = MID;
+      window._autoSquadUrl = SQUAD;
+    }}
+    // Fill admin fields
+    var admId = document.getElementById('admMatchId');
+    if (admId) admId.value = MID;
+    var admSq = document.getElementById('admSquadUrl');
+    if (admSq) admSq.value = SQUAD;
+    // Start polling
+    if (typeof poll === 'function') {{
+      if (SQUAD && typeof fetchPlaying11 === 'function') fetchPlaying11(SQUAD);
+      poll();
+      setInterval(poll, 2000);
+    }}
+  }}
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', doStart);
+  }} else {{
+    setTimeout(doStart, 100);
+  }}
+}})();
+</script>
+"""
+    # Inject before </body>
+    html = html.replace('</body>', autostart_js + '</body>')
+
     return html
 
 @app.route("/squads/<match_id>")
