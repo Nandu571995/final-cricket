@@ -151,7 +151,20 @@ def data_endpoint(match_id):
         return jsonify({}), 400
     ensure_scraper(match_id)
     state = get_or_create_match(match_id)
-    resp = jsonify(state["data"])
+    d = state["data"]
+    # If scraper hasn't populated data yet, do a quick synchronous fetch right now
+    if not d.get("team1", {}).get("name") and not d.get("last_updated"):
+        try:
+            api_data = fetch_json_api(match_id)
+            if api_data:
+                d = parse_json_api(api_data, blank_data())
+                d["last_updated"] = datetime.now().strftime("%H:%M:%S")
+                with _match_lock:
+                    _matches[match_id]["data"] = d
+                    _matches[match_id]["last_fetch"] = time.time()
+        except Exception as e:
+            log.warning(f"[{match_id}] Sync fetch failed: {e}")
+    resp = jsonify(d)
     resp.headers["Cache-Control"] = "no-store"
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
@@ -194,10 +207,39 @@ def test_page():
 
 @app.route("/debug/<match_id>")
 def debug_endpoint(match_id):
-    """Show raw JSON API response — useful for diagnosing scrape issues."""
+    """Show raw Cricbuzz API response + parsed result side by side."""
     match_id = re.sub(r'[^\d]', '', match_id)
     api_data = fetch_json_api(match_id)
-    resp = jsonify(api_data or {"error": "No data returned from Cricbuzz API"})
+    if not api_data:
+        return jsonify({"error": "Cricbuzz API returned nothing", "match_id": match_id})
+    
+    # Also show what parse_json_api produces from it
+    parsed = parse_json_api(api_data, blank_data())
+    
+    # Extract just the miniscore keys so it's readable
+    ms = api_data.get("miniscore") or {}
+    msd = api_data.get("matchScoreDetails") or {}
+    mhdr = api_data.get("matchHeader") or {}
+    
+    result = {
+        "raw_top_keys": list(api_data.keys()),
+        "miniscore_keys": list(ms.keys()),
+        "matchScoreDetails_keys": list(msd.keys()),
+        "matchHeader_keys": list(mhdr.keys()),
+        "batsmanStriker": ms.get("batsmanStriker"),
+        "batsmanNonStriker": ms.get("batsmanNonStriker"),
+        "bowlerStriker": ms.get("bowlerStriker"),
+        "bowlerNonStriker": ms.get("bowlerNonStriker"),
+        "currentRunRate": ms.get("currentRunRate"),
+        "inningsScoreList": msd.get("inningsScoreList"),
+        "parsed_team1": parsed.get("team1"),
+        "parsed_team2": parsed.get("team2"),
+        "parsed_batsman1": parsed.get("batsman1"),
+        "parsed_batsman2": parsed.get("batsman2"),
+        "parsed_bowler": parsed.get("bowler"),
+        "parsed_crr": parsed.get("crr"),
+    }
+    resp = jsonify(result)
     resp.headers["Cache-Control"] = "no-store"
     return resp
 

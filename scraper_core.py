@@ -279,47 +279,62 @@ def parse_json_api(api, data):
     try:    data["current_over"] = int(float(str(ov_num)))
     except: pass
 
-    # Batsmen
+    # ── Batsmen — try every known Cricbuzz API field name variant ────────────
     def _make_batter(p):
-        if not p: return None
-        name = (p.get("batName") or p.get("name") or "").strip()
-        if not name: return None
-        runs  = safe_int(p.get("batRuns")  or p.get("runs")  or 0)
+        if not isinstance(p, dict) or not p: return None
+        # Field name variants across Cricbuzz API versions:
+        # v1: batName/batRuns/batBalls/batFours/batSixes/batStrikeRate
+        # v2: name/runs/balls/fours/sixes/strikeRate  
+        # v3: batsman/score (very old)
+        name = (p.get("batName") or p.get("name") or p.get("batsman") or "").strip()
+        if not name or len(name) < 2: return None
+        runs  = safe_int(p.get("batRuns")  or p.get("runs")  or p.get("score") or 0)
         balls = safe_int(p.get("batBalls") or p.get("balls") or 0)
-        fours = safe_int(p.get("batFours") or p.get("fours") or 0)
-        sixes = safe_int(p.get("batSixes") or p.get("sixes") or 0)
-        sr    = str(p.get("batStrikeRate") or p.get("strikeRate") or
-                    (f"{runs*100/balls:.2f}" if balls else "0.00"))
+        fours = safe_int(p.get("batFours") or p.get("fours") or p.get("4s")   or 0)
+        sixes = safe_int(p.get("batSixes") or p.get("sixes") or p.get("6s")   or 0)
+        sr_raw = p.get("batStrikeRate") or p.get("strikeRate") or p.get("sr") or ""
+        sr = str(sr_raw) if sr_raw else (f"{runs*100/balls:.2f}" if balls else "0.00")
         photo = _photo_cache.get(name, "")
         bat_names.append(name)
-        if p.get("playerUrl"):
-            m = re.search(r"/profiles/(\d+)/([a-z0-9-]+)", p["playerUrl"])
-            if m and name not in _player_slug_cache:
-                _player_slug_cache[name] = (m.group(1), m.group(2))
+        for url_key in ("playerUrl","profileUrl","url"):
+            if p.get(url_key):
+                m = re.search(r"/profiles/(\d+)/([a-z0-9-]+)", str(p[url_key]))
+                if m and name not in _player_slug_cache:
+                    _player_slug_cache[name] = (m.group(1), m.group(2))
+                break
         return {"name":name,"runs":runs,"balls":balls,"fours":fours,
                 "sixes":sixes,"sr":sr,"on_strike":False,"photo":photo}
 
-    b1 = _make_batter(ms.get("batsmanStriker")   or ms.get("striker")    or {})
-    b2 = _make_batter(ms.get("batsmanNonStriker") or ms.get("nonStriker") or {})
+    # Try multiple key names for batsmen objects
+    striker_obj = (ms.get("batsmanStriker") or ms.get("striker") or
+                   ms.get("batsman1") or ms.get("batsmanOne") or {})
+    nonstriker_obj = (ms.get("batsmanNonStriker") or ms.get("nonStriker") or
+                      ms.get("batsman2") or ms.get("batsmanTwo") or {})
+    b1 = _make_batter(striker_obj)
+    b2 = _make_batter(nonstriker_obj)
     if b1: data["batsman1"] = b1
     if b2: data["batsman2"] = b2
 
-    # Bowler
-    bw = ms.get("bowlerStriker") or ms.get("bowlerNonStriker") or {}
-    if bw:
-        bname = (bw.get("bowlName") or bw.get("name") or "").strip()
-        if bname:
-            bovs  = str(bw.get("bowlOvs")     or bw.get("overs")   or "0")
-            bmdn  = safe_int(bw.get("bowlMaidens") or bw.get("maidens") or 0)
-            bruns = safe_int(bw.get("bowlRuns")    or bw.get("runs")    or 0)
-            bwkts = safe_int(bw.get("bowlWkts")    or bw.get("wickets") or 0)
+    # ── Bowler — try every known field name variant ───────────────────────────
+    bw = (ms.get("bowlerStriker") or ms.get("bowlerNonStriker") or
+          ms.get("bowler") or ms.get("currentBowler") or {})
+    if isinstance(bw, dict) and bw:
+        bname = (bw.get("bowlName") or bw.get("name") or bw.get("bowler") or "").strip()
+        if bname and len(bname) >= 2:
+            bovs  = str(bw.get("bowlOvs") or bw.get("overs") or bw.get("bowlOvers") or "0")
+            bmdn  = safe_int(bw.get("bowlMaidens") or bw.get("maidens") or bw.get("maiden") or 0)
+            bruns = safe_int(bw.get("bowlRuns")    or bw.get("runs")    or bw.get("bowlR")  or 0)
+            bwkts = safe_int(bw.get("bowlWkts")    or bw.get("wickets") or bw.get("bowlW")  or 0)
+            beco_raw = bw.get("bowlEcon") or bw.get("economy") or bw.get("eco") or ""
             try:    beco = f"{bruns/float(bovs):.2f}" if float(bovs) > 0 else "0.00"
-            except: beco = str(bw.get("bowlEcon") or bw.get("economy") or "0.00")
+            except: beco = str(beco_raw) if beco_raw else "0.00"
             photo = _photo_cache.get(bname, "")
-            if bw.get("playerUrl"):
-                m = re.search(r"/profiles/(\d+)/([a-z0-9-]+)", bw["playerUrl"])
-                if m and bname not in _player_slug_cache:
-                    _player_slug_cache[bname] = (m.group(1), m.group(2))
+            for url_key in ("playerUrl","profileUrl","url"):
+                if bw.get(url_key):
+                    m = re.search(r"/profiles/(\d+)/([a-z0-9-]+)", str(bw[url_key]))
+                    if m and bname not in _player_slug_cache:
+                        _player_slug_cache[bname] = (m.group(1), m.group(2))
+                    break
             data["bowler"] = {"name":bname,"overs":bovs,"maidens":bmdn,
                               "runs":bruns,"wickets":bwkts,"economy":beco,"photo":photo}
             bat_names.append(bname)
