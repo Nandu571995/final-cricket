@@ -141,7 +141,7 @@ def overlay():
     if (a2) a2.value = '{squad_safe}';
     // Fetch squad + start polling
     if (currentSquadUrl && typeof fetchPlaying11 === 'function') fetchPlaying11(currentSquadUrl);
-    if (typeof poll === 'function') {{ poll(); setInterval(poll, 2000); }}
+    if (typeof startPolling === 'function') { startPolling(); }
   }}
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _start);
   else _start();
