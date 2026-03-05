@@ -16,7 +16,7 @@ import requests as _req
 
 # ── Import all scraper logic from scraper_core ──────────────────────────────
 from scraper_core import (
-    parse, blank_data, fetch_page, load_photo_cache,
+    parse, parse_json_api, blank_data, fetch_page, fetch_json_api, load_photo_cache,
     _photo_cache, _photo_lock, save_photo_cache,
     SCRAPE_INTERVAL, SESSION, HEADERS_MOB, HEADERS_API
 )
@@ -45,23 +45,35 @@ def get_or_create_match(match_id: str) -> dict:
 
 def scrape_match(match_id: str):
     """Background thread: keeps fetching a match every SCRAPE_INTERVAL seconds."""
-    url = f"https://m.cricbuzz.com/cricket-commentary/{match_id}"
-    log.info(f"[{match_id}] Scraper thread started → {url}")
+    html_url = f"https://m.cricbuzz.com/cricket-commentary/{match_id}"
+    log.info(f"[{match_id}] Scraper thread started")
     errors = 0
     while True:
         try:
             state = get_or_create_match(match_id)
-            html  = fetch_page(url)
-            data  = parse(html, state["data"])
+            data  = dict(state["data"])  # copy
+
+            # ── Strategy 1: Cricbuzz JSON APIs (most reliable) ───────────────
+            api_data = fetch_json_api(match_id)
+            if api_data:
+                data = parse_json_api(api_data, data)
+                log.info(f"[{match_id}] JSON API ✓ | {data['team1'].get('name','?')} "
+                         f"{data['team1'].get('score','?')} vs "
+                         f"{data['team2'].get('name','?')} {data['team2'].get('score','?')} | "
+                         f"CRR={data.get('crr','?')}")
+            else:
+                # ── Strategy 2: HTML scrape fallback ─────────────────────────
+                html = fetch_page(html_url)
+                data = parse(html, data)
+                log.info(f"[{match_id}] HTML scrape ✓ | {data['team1'].get('name','?')} "
+                         f"{data['team1'].get('score','?')} vs "
+                         f"{data['team2'].get('name','?')} {data['team2'].get('score','?')}")
+
             data["last_updated"] = datetime.now().strftime("%H:%M:%S")
             with _match_lock:
-                _matches[match_id]["data"]       = data
-                _matches[match_id]["last_fetch"]  = time.time()
-                _matches[match_id]["error"]       = ""
-            t1 = data["team1"]; t2 = data["team2"]
-            log.info(f"[{match_id}] {t1.get('name','?')} {t1.get('score','?')} vs "
-                     f"{t2.get('name','?')} {t2.get('score','?')} | "
-                     f"CRR={data.get('crr','?')}")
+                _matches[match_id]["data"]      = data
+                _matches[match_id]["last_fetch"] = time.time()
+                _matches[match_id]["error"]      = ""
             errors = 0
         except Exception as e:
             errors += 1
@@ -141,15 +153,13 @@ def overlay():
     if (a2) a2.value = '{squad_safe}';
     // Fetch squad + start polling
     if (currentSquadUrl && typeof fetchPlaying11 === 'function') fetchPlaying11(currentSquadUrl);
-    if (typeof startPolling === 'function') { startPolling(); }
+    if (typeof startPolling === 'function') {{ startPolling(); }}
   }}
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _start);
   else _start();
 }})();
 """
-    html = html.replace('</script>
-</body>', autostart + '</script>
-</body>')
+    html = html.replace('</script>\n</body>', autostart + '</script>\n</body>')
 
     return html
 
@@ -284,6 +294,15 @@ def status():
                 "error": state["error"],
             }
     return jsonify(info)
+
+@app.route("/debug/<match_id>")
+def debug_endpoint(match_id):
+    """Show raw JSON API response for debugging."""
+    match_id = re.sub(r'[^\d]', '', match_id)
+    api_data = fetch_json_api(match_id)
+    resp = jsonify(api_data or {"error": "No data from API"})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 # ── Landing page HTML ─────────────────────────────────────────────────────────
 
