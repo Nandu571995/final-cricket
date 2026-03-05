@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="overlay-version" content="v22-fix-2026-03-05">
 <title>Sports Adda67 — Live Cricket Overlay v15</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Oswald:wght@400;500;600;700&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
 <style>
@@ -2138,8 +2139,9 @@ document.addEventListener('keydown',e=>{
     currentSquadUrl=squad;
     document.getElementById('matchSetup').style.display='none';
     if(currentSquadUrl)fetchPlaying11(currentSquadUrl);
-    startPolling();
   }
+  // Start polling if we have a match ID — either from URL param or baked in by server
+  if(currentMatchId) startPolling();
 })();
 
 

@@ -95,6 +95,10 @@ def ensure_scraper(match_id: str):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+@app.route("/version")
+def version():
+    return jsonify({"version": "v22-fix", "scraper": "reference-base", "timestamp": "2026-03-05"})
+
 @app.route("/")
 def index():
     return render_template_string(INDEX_HTML)
