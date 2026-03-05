@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Cricket Overlay Test</title>
+<style>
+body{background:#111;color:#eee;font-family:monospace;padding:20px;font-size:14px;}
+.ok{color:#0f0;} .err{color:#f44;} .warn{color:#fa0;}
+pre{background:#222;padding:12px;border-radius:6px;white-space:pre-wrap;word-break:break-all;}
+button{background:#0066cc;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;margin:4px;}
+h2{color:#FFD700;margin-top:24px;}
+</style>
+</head>
+<body>
+<h1>🏏 Cricket Overlay — Live Diagnostic</h1>
+<p>This page tests every layer of the stack. Open it on your Railway server: <code>/test</code></p>
+
+<h2>1. Server → /data/MATCHID</h2>
+<div id="dataResult">Testing...</div>
+
+<h2>2. Does data change over 5 seconds?</h2>
+<div id="updateResult">Waiting...</div>
+
+<h2>3. Raw JSON from /data/MATCHID</h2>
+<pre id="rawJson">Loading...</pre>
+
+<h2>4. Manual poll test</h2>
+<button onclick="manualPoll()">Poll /data/139472 now</button>
+<button onclick="startPollLoop()">Start poll loop (every 2s)</button>
+<button onclick="stopPollLoop()">Stop</button>
+<div id="pollLog" style="margin-top:8px;max-height:200px;overflow-y:auto;background:#222;padding:8px;"></div>
+
+<script>
+const MATCH_ID = '139472';
+let pollTimer = null;
+let pollCount = 0;
+let firstData = null;
+
+function log(el, msg, cls) {
+  const d = document.getElementById(el);
+  const line = document.createElement('div');
+  line.className = cls || '';
+  line.textContent = new Date().toLocaleTimeString() + ' — ' + msg;
+  d.insertBefore(line, d.firstChild);
+}
+
+async function fetchData() {
+  const url = '/data/' + MATCH_ID + '?t=' + Date.now();
+  try {
+    const r = await fetch(url, {signal: AbortSignal.timeout(5000)});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch(e) {
+    return {_error: e.message};
+  }
+}
+
+// Test 1 & 3: fetch once and show
+fetchData().then(d => {
+  if (d._error) {
+    document.getElementById('dataResult').innerHTML = '<span class="err">❌ FAILED: ' + d._error + '</span><br>This means the /data/ endpoint is broken or the server is not running.';
+  } else {
+    firstData = d;
+    const t1 = (d.team1||{}).name || '(empty)';
+    const sc1 = (d.team1||{}).score || '(empty)';
+    const crr = d.crr || '(empty)';
+    const b1 = (d.batsman1||{}).name || '(empty)';
+    const lu = d.last_updated || '(empty)';
+    const hasData = t1 !== '(empty)' || b1 !== '(empty)';
+    document.getElementById('dataResult').innerHTML =
+      (hasData ? '<span class="ok">✅ Got data</span>' : '<span class="warn">⚠️ Got response but data is BLANK</span>') +
+      '<br>team1.name: <b>' + t1 + '</b>' +
+      '<br>team1.score: <b>' + sc1 + '</b>' +
+      '<br>crr: <b>' + crr + '</b>' +
+      '<br>batsman1.name: <b>' + b1 + '</b>' +
+      '<br>last_updated: <b>' + lu + '</b>';
+    document.getElementById('rawJson').textContent = JSON.stringify(d, null, 2);
+
+    // Test 2: check if it updates after 5s
+    document.getElementById('updateResult').textContent = 'Waiting 6 seconds...';
+    setTimeout(async () => {
+      const d2 = await fetchData();
+      const same = d2.last_updated === d.last_updated;
+      const el = document.getElementById('updateResult');
+      if (same) {
+        el.innerHTML = '<span class="err">❌ NOT UPDATING — last_updated is still "' + d.last_updated + '" after 6 seconds.<br>This means the background scraper thread is either not running or failing silently.</span>';
+      } else {
+        el.innerHTML = '<span class="ok">✅ DATA IS UPDATING — changed from "' + d.last_updated + '" to "' + d2.last_updated + '"</span>';
+      }
+    }, 6000);
+  }
+});
+
+async function manualPoll() {
+  pollCount++;
+  const d = await fetchData();
+  const msg = d._error ? ('ERROR: ' + d._error) :
+    ('team1=' + (d.team1||{}).name + ' score=' + (d.team1||{}).score + ' crr=' + d.crr + ' bat1=' + (d.batsman1||{}).name + ' updated=' + d.last_updated);
+  log('pollLog', '#' + pollCount + ' ' + msg, d._error ? 'err' : 'ok');
+}
+
+function startPollLoop() {
+  if (pollTimer) return;
+  pollTimer = setInterval(manualPoll, 2000);
+  log('pollLog', 'Poll loop started', 'ok');
+}
+
+function stopPollLoop() {
+  clearInterval(pollTimer);
+  pollTimer = null;
+  log('pollLog', 'Poll loop stopped', 'warn');
+}
+
+// Auto start poll loop
+startPollLoop();
+</script>
+</body>
+</html>

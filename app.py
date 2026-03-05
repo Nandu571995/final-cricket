@@ -183,6 +183,15 @@ def status():
             }
     return jsonify(info)
 
+@app.route("/test")
+def test_page():
+    """Diagnostic test page — open this to see exactly what broken."""
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "test.html"), encoding="utf-8") as f:
+            return f.read()
+    except:
+        return "test.html not found", 404
+
 @app.route("/debug/<match_id>")
 def debug_endpoint(match_id):
     """Show raw JSON API response — useful for diagnosing scrape issues."""
