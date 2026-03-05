@@ -1419,6 +1419,8 @@ let currentMatchId='';
 let currentSquadUrl='';
 let squadCache={t1:[],t2:[]};
 let squadLoaded=false;
+let _pollInterval=null;
+function startPolling(){if(!_pollInterval){poll();_pollInterval=setInterval(poll,2000);}}
 
 // ═══ HELPERS ═══
 function st(id,v){const el=document.getElementById(id);if(!el)return;const s=String(v==null?'':v);if(el.textContent!==s)el.textContent=s;}
@@ -1492,8 +1494,7 @@ function startMatch(){
   document.getElementById('admSquadUrl').value=currentSquadUrl;
   document.getElementById('matchSetup').style.display='none';
   if(currentSquadUrl)fetchPlaying11(currentSquadUrl);
-  poll();
-  setInterval(poll,2000);
+  startPolling();
 }
 
 function updateMatchId(){
@@ -1503,7 +1504,9 @@ function updateMatchId(){
   currentMatchId=m?m[0]:'';
   currentSquadUrl=squad||'';
   if(currentSquadUrl)fetchPlaying11(currentSquadUrl);
-  poll();
+  // Reset poll interval so new match is fetched immediately
+  if(_pollInterval){clearInterval(_pollInterval);_pollInterval=null;}
+  startPolling();
   closeAdm();
 }
 
@@ -2143,8 +2146,7 @@ document.addEventListener('keydown',e=>{
     currentSquadUrl=squad;
     document.getElementById('matchSetup').style.display='none';
     if(currentSquadUrl)fetchPlaying11(currentSquadUrl);
-    poll();
-    setInterval(poll,2000);
+    startPolling();
   }
 })();
 
