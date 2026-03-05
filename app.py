@@ -207,37 +207,42 @@ def test_page():
 
 @app.route("/debug/<match_id>")
 def debug_endpoint(match_id):
-    """Show raw Cricbuzz API response + parsed result side by side."""
+    """Show what the scraper is currently producing for a match."""
     match_id = re.sub(r'[^\d]', '', match_id)
+    
+    # Try JSON API
     api_data = fetch_json_api(match_id)
-    if not api_data:
-        return jsonify({"error": "Cricbuzz API returned nothing", "match_id": match_id})
+    api_ok = bool(api_data)
     
-    # Also show what parse_json_api produces from it
-    parsed = parse_json_api(api_data, blank_data())
+    # Try HTML page
+    html_ok = False
+    html_data = blank_data()
+    try:
+        html = fetch_page(f"https://m.cricbuzz.com/cricket-commentary/{match_id}")
+        html_data = parse(html, html_data)
+        html_ok = bool(html_data.get("team1",{}).get("name"))
+    except Exception as e:
+        html_data["_error"] = str(e)
     
-    # Extract just the miniscore keys so it's readable
-    ms = api_data.get("miniscore") or {}
-    msd = api_data.get("matchScoreDetails") or {}
-    mhdr = api_data.get("matchHeader") or {}
+    # Current stored data
+    with _match_lock:
+        stored = _matches.get(match_id, {}).get("data", {})
     
     result = {
-        "raw_top_keys": list(api_data.keys()),
-        "miniscore_keys": list(ms.keys()),
-        "matchScoreDetails_keys": list(msd.keys()),
-        "matchHeader_keys": list(mhdr.keys()),
-        "batsmanStriker": ms.get("batsmanStriker"),
-        "batsmanNonStriker": ms.get("batsmanNonStriker"),
-        "bowlerStriker": ms.get("bowlerStriker"),
-        "bowlerNonStriker": ms.get("bowlerNonStriker"),
-        "currentRunRate": ms.get("currentRunRate"),
-        "inningsScoreList": msd.get("inningsScoreList"),
-        "parsed_team1": parsed.get("team1"),
-        "parsed_team2": parsed.get("team2"),
-        "parsed_batsman1": parsed.get("batsman1"),
-        "parsed_batsman2": parsed.get("batsman2"),
-        "parsed_bowler": parsed.get("bowler"),
-        "parsed_crr": parsed.get("crr"),
+        "json_api_available": api_ok,
+        "html_scraper_ok": html_ok,
+        "current_stored": stored,
+        "html_parsed": {
+            "team1": html_data.get("team1"),
+            "team2": html_data.get("team2"),
+            "crr": html_data.get("crr"),
+            "batsman1": html_data.get("batsman1"),
+            "batsman2": html_data.get("batsman2"),
+            "bowler": html_data.get("bowler"),
+            "match_status": html_data.get("match_status"),
+            "error": html_data.get("_error"),
+        } if not api_ok else None,
+        "api_parsed": parse_json_api(api_data, blank_data()) if api_ok else None,
     }
     resp = jsonify(result)
     resp.headers["Cache-Control"] = "no-store"
