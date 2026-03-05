@@ -1589,24 +1589,16 @@ async function refreshPlaying11(){
 async function poll(){
   if(!currentMatchId)return;
   try{
-    // Try server endpoint first (if backend running)
     let d=null;
     try{
       const resp=await fetch('/data/'+currentMatchId+'?t='+Date.now(),{signal:AbortSignal.timeout(3000)});
       if(resp.ok)d=await resp.json();
-    }catch(e){
-      // fallback: try crex.live
-      try{
-        const resp=await fetch('https://crex.live/api/match/'+currentMatchId+'?t='+Date.now(),{signal:AbortSignal.timeout(4000)});
-        if(resp.ok)d=await resp.json();
-      }catch(e2){}
-    }
+    }catch(e){}
     if(!d){
-      // Try data.json local fallback
       try{
         const resp=await fetch('data.json?t='+Date.now(),{signal:AbortSignal.timeout(2000)});
         if(resp.ok)d=await resp.json();
-      }catch(e3){}
+      }catch(e2){}
     }
     if(!d)return;
     if(mOverride)d={...d,...mOverride};

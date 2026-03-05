@@ -1,6 +1,6 @@
 """
-LIVE CRICKET OBS OVERLAY — Cloud Web App v15
-=========================================
+LIVE CRICKET OBS OVERLAY — Cloud Web App v22
+=============================================
 Deploy to Railway / Render / any cloud.
 
 Usage:
@@ -10,14 +10,13 @@ Usage:
 
 import os, re, json, time, threading, logging
 from datetime import datetime
-from flask import Flask, jsonify, request, send_from_directory, render_template_string, Response
+from flask import Flask, jsonify, request, render_template_string
 from bs4 import BeautifulSoup
 import requests as _req
 
-# ── Import all scraper logic from scraper_core ──────────────────────────────
 from scraper_core import (
-    parse, parse_json_api, blank_data, fetch_page, fetch_json_api, load_photo_cache,
-    _photo_cache, _photo_lock, save_photo_cache,
+    parse, parse_json_api, blank_data, fetch_page, fetch_json_api,
+    load_photo_cache, _photo_cache, _photo_lock, save_photo_cache,
     SCRAPE_INTERVAL, SESSION, HEADERS_MOB, HEADERS_API
 )
 
@@ -26,11 +25,10 @@ log = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static")
 
-# ── Per-match state ──────────────────────────────────────────────────────────
-_matches   = {}   # match_id -> {"data": {...}, "last_fetch": float, "error": str}
+# ── Per-match state ───────────────────────────────────────────────────────────
+_matches    = {}
 _match_lock = threading.Lock()
-
-SCRAPE_INTERVAL = 4   # seconds between fetches per match
+SCRAPE_INTERVAL = 4
 
 def get_or_create_match(match_id: str) -> dict:
     with _match_lock:
@@ -44,36 +42,36 @@ def get_or_create_match(match_id: str) -> dict:
         return _matches[match_id]
 
 def scrape_match(match_id: str):
-    """Background thread: keeps fetching a match every SCRAPE_INTERVAL seconds."""
+    """Background thread: JSON API first, HTML scrape fallback."""
     html_url = f"https://m.cricbuzz.com/cricket-commentary/{match_id}"
     log.info(f"[{match_id}] Scraper thread started")
     errors = 0
     while True:
         try:
             state = get_or_create_match(match_id)
-            data  = dict(state["data"])  # copy
+            data  = dict(state["data"])
 
-            # ── Strategy 1: Cricbuzz JSON APIs (most reliable) ───────────────
+            # Strategy 1: Cricbuzz JSON APIs (fast, structured)
             api_data = fetch_json_api(match_id)
             if api_data:
                 data = parse_json_api(api_data, data)
-                log.info(f"[{match_id}] JSON API ✓ | {data['team1'].get('name','?')} "
+                log.info(f"[{match_id}] API ✓  {data['team1'].get('name','?')} "
                          f"{data['team1'].get('score','?')} vs "
-                         f"{data['team2'].get('name','?')} {data['team2'].get('score','?')} | "
+                         f"{data['team2'].get('name','?')} {data['team2'].get('score','?')} "
                          f"CRR={data.get('crr','?')}")
             else:
-                # ── Strategy 2: HTML scrape fallback ─────────────────────────
+                # Strategy 2: HTML scrape fallback
                 html = fetch_page(html_url)
                 data = parse(html, data)
-                log.info(f"[{match_id}] HTML scrape ✓ | {data['team1'].get('name','?')} "
+                log.info(f"[{match_id}] HTML ✓  {data['team1'].get('name','?')} "
                          f"{data['team1'].get('score','?')} vs "
                          f"{data['team2'].get('name','?')} {data['team2'].get('score','?')}")
 
             data["last_updated"] = datetime.now().strftime("%H:%M:%S")
             with _match_lock:
-                _matches[match_id]["data"]      = data
-                _matches[match_id]["last_fetch"] = time.time()
-                _matches[match_id]["error"]      = ""
+                _matches[match_id]["data"]       = data
+                _matches[match_id]["last_fetch"]  = time.time()
+                _matches[match_id]["error"]       = ""
             errors = 0
         except Exception as e:
             errors += 1
@@ -86,32 +84,31 @@ def scrape_match(match_id: str):
                 time.sleep(15); errors = 0
         time.sleep(SCRAPE_INTERVAL)
 
-_scraper_threads = {}  # match_id -> Thread
+_scraper_threads = {}
 
 def ensure_scraper(match_id: str):
-    """Start a scraper thread for this match if not already running."""
     if match_id not in _scraper_threads or not _scraper_threads[match_id].is_alive():
         t = threading.Thread(target=scrape_match, args=(match_id,), daemon=True)
         t.start()
         _scraper_threads[match_id] = t
         log.info(f"[{match_id}] Started scraper thread")
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
-    """Landing page — enter a match ID."""
     return render_template_string(INDEX_HTML)
 
 @app.route("/overlay")
 def overlay():
-    """The OBS overlay page. ?match=12345&squad=https://cricbuzz.com/cricket-match-squads/..."""
-    match_id = request.args.get("match", "").strip()
+    """Serve the overlay with match ID baked in (reference-style clean approach)."""
+    match_id  = request.args.get("match", "").strip()
     squad_url = request.args.get("squad", "").strip()
     m = re.search(r'\d+', match_id)
     if not m:
         return "Missing ?match=ID parameter. Example: /overlay?match=12345", 400
     match_id = m.group()
+
     ensure_scraper(match_id)
     if squad_url:
         threading.Thread(target=scrape_playing11_bg, args=(match_id, squad_url), daemon=True).start()
@@ -122,151 +119,33 @@ def overlay():
     with open(html_file, encoding="utf-8") as f:
         html = f.read()
 
-    # 1. Pre-set currentMatchId so poll() works immediately — replace the JS variable declaration
-    html = html.replace(
-        "let lastData=null,prevJ=\'\',prevBall=\'\',prevBallVal=\'\';",
-        f"let lastData=null,prevJ=\'\',prevBall=\'\',prevBallVal=\'\';currentMatchId=\'{match_id}\';currentSquadUrl=\'{squad_url}\';"
-    )
+    squad_safe = squad_url.replace("\\", "").replace("'", "")
 
-    # 2. Point the fetch directly at server endpoint
+    # ── Bake match ID directly into the JS (reference approach — simple & reliable)
+    # Replace the poll fetch URL with a hardcoded match ID
     html = html.replace(
         "fetch('/data/'+currentMatchId+'?t='+Date.now(),{signal:AbortSignal.timeout(3000)})",
         f"fetch('/data/{match_id}?t='+Date.now(),{{signal:AbortSignal.timeout(3000)}})"
     )
-
-    # 3. Inject auto-start block right before </script> at end
-    squad_safe = squad_url.replace("\\", "").replace("'", "")
-    autostart = f"""
-// ═══ SERVER INJECTED AUTO-START ═══
-(function serverAutoStart() {{
-  function _start() {{
-    // Hide setup screen
-    var s = document.getElementById('matchSetup');
-    if (s) s.style.display = 'none';
-    // Set match globals
-    currentMatchId = '{match_id}';
-    currentSquadUrl = '{squad_safe}';
-    // Set admin fields
-    var a1 = document.getElementById('admMatchId');
-    if (a1) a1.value = '{match_id}';
-    var a2 = document.getElementById('admSquadUrl');
-    if (a2) a2.value = '{squad_safe}';
-    // Fetch squad + start polling
-    if (currentSquadUrl && typeof fetchPlaying11 === 'function') fetchPlaying11(currentSquadUrl);
-    if (typeof startPolling === 'function') {{ startPolling(); }}
-  }}
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _start);
-  else _start();
-}})();
-"""
-    html = html.replace('</script>\n</body>', autostart + '</script>\n</body>')
+    # Pre-set JS variables so setup screen auto-hides on load
+    html = html.replace(
+        "let currentMatchId='';",
+        f"let currentMatchId='{match_id}';"
+    )
+    html = html.replace(
+        "let currentSquadUrl='';",
+        f"let currentSquadUrl='{squad_safe}';"
+    )
+    # Hide the setup screen by default when served from server
+    html = html.replace(
+        'id="matchSetup"',
+        'id="matchSetup" style="display:none"'
+    )
 
     return html
 
-@app.route("/squads/<match_id>")
-def squad_endpoint(match_id):
-    """Return playing XI JSON for a match"""
-    match_id = re.sub(r'[^\d]', '', match_id)
-    with _match_lock:
-        state = _matches.get(match_id, {})
-        squad = state.get("playing11", {})
-    resp = jsonify(squad)
-    resp.headers["Cache-Control"] = "no-store"
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    return resp
-
-def scrape_playing11_bg(match_id, squad_url):
-    """Background: scrape playing XI from Cricbuzz squad page"""
-    try:
-        r = SESSION.get(squad_url, timeout=12)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        
-        teams = {}
-        # Find team sections
-        team_sections = soup.find_all("div", class_=lambda c: c and "squad" in " ".join(c).lower())
-        if not team_sections:
-            # Try alternate structure
-            team_sections = soup.find_all("div", attrs={"data-team": True})
-        
-        # Fallback: find player lists
-        player_lists = []
-        for ul in soup.find_all(["ul", "div"]):
-            cls = " ".join(ul.get("class", []))
-            if "squad" in cls.lower() or "player" in cls.lower():
-                players_in = ul.find_all("a", href=lambda h: h and "/profiles/" in h)
-                if len(players_in) >= 5:
-                    player_lists.append(players_in)
-        
-        all_players = []
-        for pl_list in player_lists[:2]:
-            team_players = []
-            for a in pl_list:
-                name = a.get_text(strip=True)
-                if not name or len(name) < 3: continue
-                # Role from nearby elements
-                role_el = a.find_next(class_=lambda c: c and "role" in " ".join(c).lower())
-                role = role_el.get_text(strip=True) if role_el else "Player"
-                # Photo
-                img = a.find("img")
-                photo = ""
-                if img:
-                    src = img.get("src", "")
-                    if "cricbuzz" in src: photo = src.replace("d=low", "d=high")
-                team_players.append({"name": name, "role": role, "photo": photo})
-            if team_players:
-                all_players.append(team_players)
-        
-        # Try JSON in page scripts
-        if not all_players:
-            for script in soup.find_all("script"):
-                content = script.string or ""
-                if "playing11" in content.lower() or "squad" in content.lower():
-                    # Try to extract player names
-                    names = re.findall(r'"name"\s*:\s*"([A-Z][a-zA-Z\s\.]{2,30})"', content)
-                    if len(names) >= 11:
-                        chunk1 = [{"name": n, "role": "Player", "photo": ""} for n in names[:11]]
-                        chunk2 = [{"name": n, "role": "Player", "photo": ""} for n in names[11:22]]
-                        if chunk1: all_players.append(chunk1)
-                        if chunk2: all_players.append(chunk2)
-                        break
-        
-        # Get team names from page title or headings
-        team_names = []
-        for h in soup.find_all(["h1","h2","h3"]):
-            t = h.get_text(strip=True)
-            if " vs " in t.lower() or " v " in t.lower():
-                parts = re.split(r'\s+vs?\s+', t, flags=re.I)
-                if len(parts) >= 2:
-                    team_names = [parts[0].strip(), parts[1].strip()]
-                break
-        
-        playing11 = {
-            "team1": {"name": team_names[0] if team_names else "Team 1", "players": all_players[0] if all_players else []},
-            "team2": {"name": team_names[1] if len(team_names) > 1 else "Team 2", "players": all_players[1] if len(all_players) > 1 else []}
-        }
-        
-        with _match_lock:
-            if match_id not in _matches:
-                _matches[match_id] = {"data": blank_data(), "last_fetch": 0, "error": "", "fetching": False}
-            _matches[match_id]["playing11"] = playing11
-        
-        log.info(f"[{match_id}] Playing XI loaded: {len(playing11['team1']['players'])} + {len(playing11['team2']['players'])} players")
-        
-        # Also inject into data.json team data
-        with _match_lock:
-            d = _matches[match_id]["data"]
-            if d["team1"].get("name") and not d["team1"].get("playing11"):
-                d["team1"]["playing11"] = playing11["team1"]["players"]
-            if d["team2"].get("name") and not d["team2"].get("playing11"):
-                d["team2"]["playing11"] = playing11["team2"]["players"]
-                
-    except Exception as e:
-        log.warning(f"[{match_id}] Playing XI scrape failed: {e}")
-
 @app.route("/data/<match_id>")
 def data_endpoint(match_id):
-    """JSON endpoint polled by the overlay every 2s."""
     match_id = re.sub(r'[^\d]', '', match_id)
     if not match_id:
         return jsonify({}), 400
@@ -277,41 +156,122 @@ def data_endpoint(match_id):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
 
+@app.route("/squads/<match_id>")
+def squad_endpoint(match_id):
+    match_id = re.sub(r'[^\d]', '', match_id)
+    with _match_lock:
+        squad = _matches.get(match_id, {}).get("playing11", {})
+    resp = jsonify(squad)
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
 @app.route("/status")
 def status():
-    """Shows all active matches."""
     with _match_lock:
         info = {}
         for mid, state in _matches.items():
             d = state["data"]
             info[mid] = {
-                "team1": d["team1"].get("name","?"),
-                "team2": d["team2"].get("name","?"),
-                "score1": d["team1"].get("score","?"),
-                "score2": d["team2"].get("score","?"),
-                "crr": d.get("crr","?"),
+                "team1":      d["team1"].get("name","?"),
+                "team2":      d["team2"].get("name","?"),
+                "score1":     d["team1"].get("score","?"),
+                "score2":     d["team2"].get("score","?"),
+                "crr":        d.get("crr","?"),
                 "last_fetch": datetime.fromtimestamp(state["last_fetch"]).strftime("%H:%M:%S") if state["last_fetch"] else "never",
-                "error": state["error"],
+                "error":      state["error"],
             }
     return jsonify(info)
 
 @app.route("/debug/<match_id>")
 def debug_endpoint(match_id):
-    """Show raw JSON API response for debugging."""
+    """Show raw JSON API response — useful for diagnosing scrape issues."""
     match_id = re.sub(r'[^\d]', '', match_id)
     api_data = fetch_json_api(match_id)
-    resp = jsonify(api_data or {"error": "No data from API"})
+    resp = jsonify(api_data or {"error": "No data returned from Cricbuzz API"})
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
-# ── Landing page HTML ─────────────────────────────────────────────────────────
+# ── Playing XI background scraper ─────────────────────────────────────────────
+
+def scrape_playing11_bg(match_id, squad_url):
+    try:
+        r = SESSION.get(squad_url, timeout=12)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        all_players = []
+        for ul in soup.find_all(["ul", "div"]):
+            cls = " ".join(ul.get("class", []))
+            if "squad" in cls.lower() or "player" in cls.lower():
+                players_in = ul.find_all("a", href=lambda h: h and "/profiles/" in h)
+                if len(players_in) >= 5:
+                    all_players.append(players_in)
+
+        team_players_list = []
+        for pl_list in all_players[:2]:
+            team_players = []
+            for a in pl_list:
+                name = a.get_text(strip=True)
+                if not name or len(name) < 3: continue
+                role_el = a.find_next(class_=lambda c: c and "role" in " ".join(c).lower())
+                role = role_el.get_text(strip=True) if role_el else "Player"
+                img = a.find("img")
+                photo = ""
+                if img:
+                    src = img.get("src", "")
+                    if "cricbuzz" in src: photo = src.replace("d=low", "d=high")
+                team_players.append({"name": name, "role": role, "photo": photo})
+            if team_players:
+                team_players_list.append(team_players)
+
+        # Fallback: extract from page scripts
+        if not team_players_list:
+            for script in soup.find_all("script"):
+                content = script.string or ""
+                if "playing11" in content.lower() or "squad" in content.lower():
+                    names = re.findall(r'"name"\s*:\s*"([A-Z][a-zA-Z\s\.]{2,30})"', content)
+                    if len(names) >= 11:
+                        chunk1 = [{"name": n, "role": "Player", "photo": ""} for n in names[:11]]
+                        chunk2 = [{"name": n, "role": "Player", "photo": ""} for n in names[11:22]]
+                        if chunk1: team_players_list.append(chunk1)
+                        if chunk2: team_players_list.append(chunk2)
+                        break
+
+        team_names = []
+        for h in soup.find_all(["h1","h2","h3"]):
+            t = h.get_text(strip=True)
+            if " vs " in t.lower() or " v " in t.lower():
+                parts = re.split(r'\s+vs?\s+', t, flags=re.I)
+                if len(parts) >= 2:
+                    team_names = [parts[0].strip(), parts[1].strip()]
+                break
+
+        playing11 = {
+            "team1": {"name": team_names[0] if team_names else "Team 1",
+                      "players": team_players_list[0] if team_players_list else []},
+            "team2": {"name": team_names[1] if len(team_names) > 1 else "Team 2",
+                      "players": team_players_list[1] if len(team_players_list) > 1 else []}
+        }
+
+        with _match_lock:
+            if match_id not in _matches:
+                _matches[match_id] = {"data": blank_data(), "last_fetch": 0, "error": "", "fetching": False}
+            _matches[match_id]["playing11"] = playing11
+
+        log.info(f"[{match_id}] Playing XI: {len(playing11['team1']['players'])} + {len(playing11['team2']['players'])} players")
+
+    except Exception as e:
+        log.warning(f"[{match_id}] Playing XI scrape failed: {e}")
+
+# ── Landing page ──────────────────────────────────────────────────────────────
 
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>🏏 Sports Adda67 — Live Cricket Overlay v20</title>
+<title>🏏 Sports Adda67 — Live Cricket Overlay</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#05080f;color:#fff;font-family:'Segoe UI',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;}
@@ -329,19 +289,16 @@ input:focus{border-color:#FF6B00;}
 .lbtn{flex:1;text-align:center;padding:8px;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none;letter-spacing:1px;}
 .obs{background:rgba(0,176,255,.15);color:#00B0FF;border:1px solid rgba(0,176,255,.3);}
 .preview{background:rgba(255,107,0,.15);color:#FF6B00;border:1px solid rgba(255,107,0,.3);}
-.features{margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:6px;}
-.feat{background:rgba(255,255,255,.04);border:1px solid rgba(255,200,0,.1);border-radius:6px;padding:6px 10px;font-size:11px;color:rgba(255,255,255,.5);}
-.feat b{color:rgba(255,200,0,.7);}
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>🏏 Sports Adda67 Cricket Overlay v20</h1>
-  <div class="sub">Live scores · Auto-updating · H2H · Venue & Weather · Playing XI from Cricbuzz</div>
+  <h1>🏏 Sports Adda67 Cricket Overlay</h1>
+  <div class="sub">Live scores · Auto-updating · Playing XI · H2H · Venue & Weather</div>
   <form onsubmit="go(event)">
     <label>CRICBUZZ MATCH ID OR URL</label>
     <input id="mid" placeholder="e.g. 148765  or paste full cricbuzz URL" autocomplete="off">
-    <label>SQUAD URL (Cricbuzz squad page — for Playing XI)</label>
+    <label>SQUAD URL (optional — for Playing XI)</label>
     <input id="squad" placeholder="https://www.cricbuzz.com/cricket-match-squads/12345/..." style="font-size:13px;">
     <button class="btn" type="submit">▶ OPEN OVERLAY</button>
   </form>
@@ -349,20 +306,11 @@ input:focus{border-color:#FF6B00;}
     <a class="lbtn obs" id="obsLink" href="#" target="_blank">📺 Open in OBS</a>
     <a class="lbtn preview" id="previewLink" href="#" target="_blank">🔍 Preview in Browser</a>
   </div>
-  <div class="features">
-    <div class="feat"><b>🔄 Auto-scrape</b> every 2s from Cricbuzz</div>
-    <div class="feat"><b>🏳️ Flags</b> circular with rotating ring</div>
-    <div class="feat"><b>🤝 H2H</b> click left team flag</div>
-    <div class="feat"><b>🏟️ Venue+Weather</b> click right team flag</div>
-    <div class="feat"><b>👥 Playing XI</b> from Cricbuzz squads</div>
-    <div class="feat"><b>👤 Player detail</b> click any player card</div>
-    <div class="feat"><b>🌈 Sweep</b> 4 passes, multi-color</div>
-    <div class="feat"><b>⚽ Ball</b> shifted up on player area</div>
-  </div>
   <div class="tip">
-    <b>How to get Match ID:</b> cricbuzz.com/live-cricket-scores/<b>12345</b>/india-vs...<br>
+    <b>Match ID:</b> cricbuzz.com/live-cricket-scores/<b>12345</b>/india-vs...<br>
     <b>Squad URL:</b> cricbuzz.com/cricket-match-squads/<b>12345</b>/match-name<br>
-    <b>OBS:</b> Browser Source → paste overlay URL → 1280×720
+    <b>OBS:</b> Browser Source → paste overlay URL → 1280×720<br>
+    <b>Debug:</b> visit /status for live scraper state · /debug/MATCHID for raw API data
   </div>
 </div>
 <script>
@@ -370,7 +318,7 @@ function go(e) {
   e.preventDefault();
   const raw = document.getElementById('mid').value.trim();
   const squad = document.getElementById('squad').value.trim();
-  const m = raw.match(/\\d+/);
+  const m = raw.match(/[0-9]+/);
   if(!m) { alert('Please enter a match ID or Cricbuzz URL'); return; }
   const id = m[0];
   let url = window.location.origin + '/overlay?match=' + id;

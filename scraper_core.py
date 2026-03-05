@@ -22,7 +22,6 @@ HEADERS_MOB = {
 HEADERS_API = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.cricbuzz.com/",
     "x-cricbuzz-client": "app",
     "x-app-version": "6.06",
@@ -169,24 +168,22 @@ def fetch_page(url):
 
 def fetch_json_api(match_id: str) -> dict:
     """
-    Fetch live match data from Cricbuzz internal JSON APIs.
-    Returns merged dict, or None on failure.
+    Fetch live data from Cricbuzz internal JSON APIs (primary data source).
+    Falls back gracefully — returns {} if both fail.
     """
-    apis = [
+    result = {}
+    for path in [
         f"https://www.cricbuzz.com/api/cricket-match/{match_id}/mini-scorecard",
         f"https://www.cricbuzz.com/api/cricket-match/{match_id}/live-score",
-    ]
-    result = {}
-    for url in apis:
+    ]:
         try:
-            r = SESSION.get(url, headers=HEADERS_API, timeout=8)
+            r = SESSION.get(path, headers=HEADERS_API, timeout=8)
             if r.status_code == 200:
                 d = r.json()
-                if d:
-                    result.update(d)
+                if d: result.update(d)
         except Exception:
             pass
-    return result if result else None
+    return result
 
 def blank_data():
     return {
@@ -580,36 +577,31 @@ def parse(html, data):
     return data
 
 
-# ─── JSON API Parser ──────────────────────────────────────────────────────────
+# ─── JSON API Parser (primary source) ────────────────────────────────────────
 
 def parse_json_api(api: dict, data: dict) -> dict:
     """
-    Parse Cricbuzz internal JSON API response into our data format.
-    Handles /api/cricket-match/{id}/mini-scorecard and /live-score responses.
+    Parse Cricbuzz internal JSON API response.
+    Handles /mini-scorecard and /live-score response shapes.
     """
     bat_names = []
-
-    # ── Mini-scorecard format ─────────────────────────────────────────────────
-    # Top-level keys: matchHeader, miniscore, commentaryList, matchScoreDetails
-    ms  = api.get("miniscore") or api.get("Miniscore") or {}
+    ms   = api.get("miniscore") or api.get("Miniscore") or {}
     mhdr = api.get("matchHeader") or api.get("MatchHeader") or {}
     msd  = api.get("matchScoreDetails") or {}
 
-    # ── Match format / series ─────────────────────────────────────────────────
+    # ── Match format / series ──────────────────────────────────────────────
     fmt = (mhdr.get("matchFormat") or mhdr.get("matchType") or "").upper()
     if fmt: data["match_format"] = fmt
-    series = (mhdr.get("seriesDesc") or mhdr.get("seriesName") or "")
+    series = mhdr.get("seriesDesc") or mhdr.get("seriesName") or ""
     if series: data["series_name"] = series[:80]
 
-    # ── Match status ─────────────────────────────────────────────────────────
+    # ── Match status ──────────────────────────────────────────────────────
     status = (ms.get("customStatus") or mhdr.get("status") or
-              msd.get("customStatus") or "LIVE")
+              msd.get("customStatus") or "")
     if status: data["match_status"] = str(status).strip()[:50]
 
-    # ── Team names + scores ───────────────────────────────────────────────────
-    # matchScoreDetails has inningsScoreList
+    # ── Team names + scores from inningsScoreList ─────────────────────────
     innings = msd.get("inningsScoreList") or []
-    teams   = {}
     for inn in innings:
         tid   = inn.get("inningsId", 0)
         tname = inn.get("batTeamName") or inn.get("teamName") or ""
@@ -618,21 +610,18 @@ def parse_json_api(api: dict, data: dict) -> dict:
         overs = str(inn.get("overs", ""))
         if tname:
             key = "team1" if tid in (1, 3) else "team2"
-            # For second innings overwrite cleanly
-            if not data[key]["name"] or data[key]["name"] == tname:
-                data[key]["name"]  = tname
-                data[key]["score"] = f"{score}-{wkts}" if score != "" else ""
-                data[key]["overs"] = overs
-                teams[tname] = key
+            data[key]["name"]  = tname
+            data[key]["score"] = f"{score}-{wkts}" if score != "" else ""
+            data[key]["overs"] = overs
 
-    # Fallback: matchHeader team names
+    # Fallback team names from matchHeader
     if not data["team1"]["name"]:
         t1 = mhdr.get("team1") or {}
         t2 = mhdr.get("team2") or {}
         if t1.get("name"): data["team1"]["name"] = t1["name"]
         if t2.get("name"): data["team2"]["name"] = t2["name"]
 
-    # ── CRR / RRR / Target / Partnership / Last Wicket ───────────────────────
+    # ── CRR / RRR / Target / Partnership / Last Wicket ────────────────────
     crr = ms.get("currentRunRate") or ms.get("crr") or ""
     if crr: data["crr"] = str(crr)
     rrr = ms.get("requiredRunRate") or ms.get("rrr") or ""
@@ -647,93 +636,63 @@ def parse_json_api(api: dict, data: dict) -> dict:
     elif isinstance(pship, str) and pship:
         data["partnership"] = pship
 
-    lw = ms.get("lastWicket") or ms.get("lastwicket") or ""
+    lw = ms.get("lastWicket") or ""
     if lw: data["last_wicket"] = str(lw)[:100]
 
-    # ── Over balls ────────────────────────────────────────────────────────────
-    over_balls = ms.get("recentOvsStats") or ms.get("overSummaryList") or ""
-    if isinstance(over_balls, str) and over_balls:
-        tokens = re.findall(r'[W46]|\d', over_balls.upper())
+    # ── Over balls ────────────────────────────────────────────────────────
+    over_str = ms.get("recentOvsStats") or ms.get("overSummaryList") or ""
+    if isinstance(over_str, str) and over_str:
+        tokens = re.findall(r'W|WD|NB|LB|\d', over_str.upper())
         if tokens:
             data["last_over_balls"] = tokens[:6]
-            data["current_ball"] = tokens[-1]
-    elif isinstance(over_balls, list):
-        flat = []
-        for ov in over_balls[-1:]:
-            if isinstance(ov, dict):
-                flat = [str(b.get("score","")).upper() for b in ov.get("overSummary", [])]
-            elif isinstance(ov, str):
-                flat = re.findall(r'[W46]|\d', ov.upper())
-        if flat:
-            data["last_over_balls"] = flat[:6]
-            data["current_ball"] = flat[-1]
-
+            data["current_ball"]    = tokens[-1]
     ov_num = ms.get("overs") or ms.get("currentOver") or 0
     try: data["current_over"] = int(float(str(ov_num)))
     except: pass
 
-    # ── Batsmen ───────────────────────────────────────────────────────────────
+    # ── Batsmen ───────────────────────────────────────────────────────────
     def _make_batter(p):
         if not p: return None
         name = p.get("batName") or p.get("name") or ""
         if not name: return None
-        runs  = safe_int(p.get("batRuns") or p.get("runs") or 0)
-        balls = safe_int(p.get("batBalls") or p.get("balls") or 0)
-        fours = safe_int(p.get("batFours") or p.get("fours") or 0)
-        sixes = safe_int(p.get("batSixes") or p.get("sixes") or 0)
+        runs  = safe_int(p.get("batRuns")  or p.get("runs")   or 0)
+        balls = safe_int(p.get("batBalls") or p.get("balls")  or 0)
+        fours = safe_int(p.get("batFours") or p.get("fours")  or 0)
+        sixes = safe_int(p.get("batSixes") or p.get("sixes")  or 0)
         sr    = str(p.get("batStrikeRate") or p.get("strikeRate") or
                     (f"{runs*100/balls:.2f}" if balls else "0.00"))
-        strike= bool(p.get("onStrike") or p.get("isStriker") or False)
         photo = _photo_cache.get(name, "")
         bat_names.append(name)
-        return {"name":name,"runs":runs,"balls":balls,"fours":fours,
-                "sixes":sixes,"sr":sr,"on_strike":strike,"photo":photo}
+        return {"name": name, "runs": runs, "balls": balls, "fours": fours,
+                "sixes": sixes, "sr": sr, "on_strike": False, "photo": photo}
 
-    bat_info = ms.get("batsmanStriker") or ms.get("striker") or {}
-    bat2_info = ms.get("batsmanNonStriker") or ms.get("nonStriker") or {}
-
-    # Also try matchScoreDetails > inningsScore > batsmen
-    if not bat_info:
-        for inn in innings:
-            bats = inn.get("batsmen") or inn.get("batsmanScoreList") or []
-            for b in bats:
-                if b.get("onStrike") or b.get("isStriker"):
-                    bat_info = b; break
-                elif not bat2_info:
-                    bat2_info = b
-
-    b1 = _make_batter(bat_info)
-    b2 = _make_batter(bat2_info)
+    b1 = _make_batter(ms.get("batsmanStriker") or ms.get("striker") or {})
+    b2 = _make_batter(ms.get("batsmanNonStriker") or ms.get("nonStriker") or {})
     if b1: data["batsman1"] = b1
     if b2: data["batsman2"] = b2
 
-    # ── Bowler ────────────────────────────────────────────────────────────────
+    # ── Bowler ────────────────────────────────────────────────────────────
     bowl_info = ms.get("bowlerStriker") or ms.get("currentBowler") or {}
-    if not bowl_info:
-        for inn in innings:
-            bwlrs = inn.get("bowlers") or inn.get("bowlerScoreList") or []
-            if bwlrs: bowl_info = bwlrs[-1]; break
-
     if bowl_info:
         bname = bowl_info.get("bowlName") or bowl_info.get("name") or ""
         if bname:
-            bovs  = str(bowl_info.get("bowlOvs") or bowl_info.get("overs") or "0")
+            bovs  = str(bowl_info.get("bowlOvs")     or bowl_info.get("overs")   or "0")
             bmdn  = safe_int(bowl_info.get("bowlMaidens") or bowl_info.get("maidens") or 0)
-            bruns = safe_int(bowl_info.get("bowlRuns") or bowl_info.get("runs") or 0)
-            bwkts = safe_int(bowl_info.get("bowlWkts") or bowl_info.get("wickets") or 0)
-            try: beco = f"{bruns/float(bovs):.2f}" if float(bovs) > 0 else "0.00"
-            except: beco = str(bowl_info.get("bowlEcon") or bowl_info.get("economy") or "0.00")
+            bruns = safe_int(bowl_info.get("bowlRuns")    or bowl_info.get("runs")    or 0)
+            bwkts = safe_int(bowl_info.get("bowlWkts")    or bowl_info.get("wickets") or 0)
+            try:   beco = f"{bruns/float(bovs):.2f}" if float(bovs) > 0 else "0.00"
+            except: beco = str(bowl_info.get("bowlEcon") or "0.00")
             photo = _photo_cache.get(bname, "")
-            data["bowler"] = {"name":bname,"overs":bovs,"maidens":bmdn,
-                              "runs":bruns,"wickets":bwkts,"economy":beco,"photo":photo}
+            data["bowler"] = {"name": bname, "overs": bovs, "maidens": bmdn,
+                              "runs": bruns, "wickets": bwkts, "economy": beco, "photo": photo}
             bat_names.append(bname)
 
-    # ── Yet to bat ────────────────────────────────────────────────────────────
+    # ── Yet to bat ────────────────────────────────────────────────────────
     ytb = ms.get("yetToBat") or ms.get("yetToBatList") or ""
     if isinstance(ytb, list): ytb = ", ".join(str(x) for x in ytb)
     if ytb: data["yet_to_bat"] = str(ytb)[:200]
 
-    # ── Patch photos from cache ───────────────────────────────────────────────
+    # ── Photos: patch from cache + trigger async fetch ─────────────────────
     for key in ["batsman1", "batsman2", "bowler"]:
         p = data.get(key, {})
         if p.get("name") and not p.get("photo"):
@@ -741,8 +700,7 @@ def parse_json_api(api: dict, data: dict) -> dict:
             if cached: data[key]["photo"] = cached
 
     uncached = [n for n in set(bat_names) if n and n not in _photo_cache]
-    if uncached:
-        fetch_photos_async(uncached)
+    if uncached: fetch_photos_async(uncached)
 
     return data
 
